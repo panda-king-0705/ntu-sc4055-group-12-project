@@ -46,13 +46,22 @@ def sample_balanced(df_source, total_samples, seed=42):
     return pd.concat([df_pos, df_neg]).sample(frac=1, random_state=seed).reset_index(drop=True)
 
 df_train_sub = sample_balanced(df_train_full, total_samples=400, seed=42)
-df_test_sub = sample_balanced(df_test_full, total_samples=100, seed=42)
+
+# Test set: every row of the held-out engines, not downsampled. Only training has to be
+# small (quantum training cost), predicting is cheap. Class balance stays realistic (~15% failing).
+df_test_sub = df_test_full.reset_index(drop=True)
 
 # Extract raw matrices as pure NumPy arrays
 X_train = df_train_sub[feature_cols].values.astype(np.float64)
 y_train = df_train_sub['target'].values
 X_test = df_test_sub[feature_cols].values.astype(np.float64)
 y_test = df_test_sub['target'].values
+
+# Engine id and remaining cycles per row (for splitting by engine and for error analysis)
+unit_train = df_train_sub['unit'].values
+unit_test = df_test_sub['unit'].values
+rul_train = df_train_sub['RUL'].values
+rul_test = df_test_sub['RUL'].values
 
 # ---------------------------------------------------------
 # Step 6: Pure NumPy Standard Scaling (Zero Mean, Unit Var)
@@ -118,7 +127,11 @@ np.savez_compressed(
     X_train=X_train_ml,
     X_test=X_test_ml,
     y_train=y_train,
-    y_test=y_test
+    y_test=y_test,
+    unit_train=unit_train,
+    unit_test=unit_test,
+    rul_train=rul_train,
+    rul_test=rul_test
 )
 
 # Dataset 2: Quantum Machine Learning
@@ -129,7 +142,11 @@ np.savez_compressed(
     X_train=X_train_qml,
     X_test=X_test_qml,
     y_train=y_train,
-    y_test=y_test
+    y_test=y_test,
+    unit_train=unit_train,
+    unit_test=unit_test,
+    rul_train=rul_train,
+    rul_test=rul_test
 )
 
 
@@ -152,3 +169,5 @@ print(f"X_test shape:  {X_test_qml.shape}")
 print(f"Feature range: [{X_train_qml.min():.4f}, {X_train_qml.max():.4f}]")
 
 print("\nBoth datasets use identical labels and train-test splits.")
+print(f"Train: {len(y_train)} rows, {np.mean(y_train):.0%} failing, {len(np.unique(unit_train))} engines")
+print(f"Test:  {len(y_test)} rows, {np.mean(y_test):.1%} failing, {len(np.unique(unit_test))} engines")
