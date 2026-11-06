@@ -1,116 +1,123 @@
 # QSVC results (Person 3)
 
-Quantum Support Vector Classifier on the shared 4-feature, angle-encoded C-MAPSS data
-(`data/cmapss_qml_4f_500.npz`, 400 train / 100 test, balanced).
-Reproduce with `python scripts/run_qsvc.py` (~20 min) or `--fast` (~3 min, same numbers).
+Quantum Support Vector Classifier on the shared data, following the group protocol in
+[`docs/vqc_handoff.md`](../../docs/vqc_handoff.md):
+- `load_data(quantum=True)`: the 4 PCA features scaled to [0, π].
+- `train_val_split`: 319 train / 81 validation rows, split by engine.
+- Every choice (C, feature map, angle scale α) is made on **validation**.
+- The test set (4,291 rows from 20 held-out engines, 14.4% failing) is only used for reporting, scored with `evaluate()`.
 
-## Method in one paragraph
+Reproduce with `python scripts/run_qsvc.py` (about 10 min). It writes everything in this folder.
 
-A QSVC keeps the classical SVM optimiser and replaces the kernel by a state overlap,
-$k(x,x') = |\langle 0|U^\dagger(x')U(x)|0\rangle|^2$, where $U$ is a feature-map circuit.
-On hardware each entry is estimated with the *compute–uncompute* circuit $U^\dagger(x')U(x)$:
-the probability of measuring $|0000\rangle$ equals the kernel value. We use Qiskit's
-`ZZFeatureMap` (H layer, $P(2x_i)$ single-qubit phases, and $\text{CX}\,P(2(\pi-x_i)(\pi-x_j))\,\text{CX}$
-entangling blocks) on 4 qubits. The headline kernel is computed with
-`FidelityQuantumKernel` (sampler-based compute–uncompute); sweeps use
-`FidelityStatevectorKernel`, which agrees to $4\times10^{-12}$ (E0). The SVM regulariser $C$
-is always picked by 5-fold CV on the **training set only**; the feature map for the headline
-model (Qiskit default: reps=2, full entanglement) was fixed before seeing any results.
+## Method
 
-## E1 — Headline comparison (test set, n=100)
+A QSVC keeps the classical SVM optimiser and replaces its kernel with a quantum state overlap:
 
-| Model | CV acc | Test acc [95% bootstrap CI] | F1 | ROC-AUC | # support vectors |
-|---|---|---|---|---|---|
-| QSVC, ZZFeatureMap (reps=2, full) | 0.720 | **0.76** [0.68, 0.84] | 0.789 | 0.866 | 371 / 400 |
-| Classical SVM, RBF | 0.960 | **0.97** [0.93, 1.00] | 0.971 | 0.994 | 81 |
-| Classical SVM, linear | 0.957 | **0.96** [0.92, 0.99] | 0.961 | 0.994 | 91 |
+$$k(x,x') = |\langle 0|U^\dagger(x')\,U(x)|0\rangle|^2$$
 
-Exact McNemar test, QSVC vs RBF-SVM: the QSVC is never right where the RBF-SVM is wrong; the reverse happens 21 times (p ≈ 1e-6).
-**The default quantum kernel is significantly worse.** It uses 371/400 points as support vectors, so it is close to memorising the training data.
+where $U$ is a feature-map circuit. On hardware, each entry is estimated with the *compute–uncompute* circuit $U^\dagger(x')U(x)$: the probability of measuring $|0000\rangle$ is the kernel value. The SVM is then trained on the precomputed Gram matrix. This is exactly what `qiskit_machine_learning.algorithms.QSVC` does, and we checked the two give identical predictions (E0).
 
-Figures: `figures/e1_kernel_heatmaps.png` and `figures/e1_confusion_qsvc.png`.
+Kernels are computed with `FidelityStatevectorKernel` (exact, noiseless). It agrees with the circuit-based `FidelityQuantumKernel` to within 4×10⁻¹², but it takes seconds rather than about 1.5 h on the 4,291×319 test kernel. Finite-shot sampling is studied separately in E4.
 
-## E2 — Feature-map ablation: does entanglement help?
+**Feature maps** (all 4 qubits, one feature per qubit):
 
-| Feature map | Entangling | CX gates | Depth | CV acc | Test acc | Kernel-target alignment | Mean off-diagonal k |
+| Name | Circuit | CX gates |
+|---|---|---|
+| RY (VQC encoding) | RY(x_i) on each qubit, the same encoding as Person 2's VQC | 0 |
+| Z_r1, Z_r2 | Qiskit `z_feature_map`: [H, P(2x_i)] × reps | 0 |
+| ZZ_linear_r1/r2 | Qiskit `zz_feature_map`: Z layer + CX·P(2(π−x_i)(π−x_j))·CX on neighbours | 6 / 12 |
+| ZZ_full_r1/r2/r3 | the same, on all pairs (**Qiskit's default is ZZ_full_r2**) | 12 / 24 / 36 |
+
+**Angle scale α**: every feature map gets α·x instead of x. A smaller α makes the kernel smoother (a wider bandwidth). See Shaydulin & Wild (2022), *Importance of kernel bandwidth in quantum machine learning*.
+
+The models without CX gates have product-state kernels, for example $\prod_i \cos^2((x_i-x'_i)/2)$ for RY. Those can be computed classically in closed form. Two independent consistency checks fall out of the grid: RY at α equals Z_r1 at α/2, and their rows in `e1_grid.csv` are identical.
+
+## E1: Feature-map × bandwidth grid (64 configurations)
+
+Full table: `e1_grid.csv`. Figures: `figures/e1_feature_maps.png` and `figures/e1_bandwidth.png`.
+
+**At the default angles (α = 1), entanglement hurts:**
+
+| Feature map | CX | Val acc | Test recall | Missed failures (of 620) | False alarms | Test F1 | Mean off-diagonal k |
 |---|---|---|---|---|---|---|---|
-| Z, reps 1 | no | 0 | 2 | **0.950** | **0.97** | **0.371** | 0.138 |
-| Z, reps 2 | no | 0 | 4 | 0.850 | 0.94 | 0.125 | 0.269 |
-| ZZ linear, reps 1 | yes | 6 | 11 | 0.880 | 0.90 | 0.146 | 0.076 |
-| ZZ linear, reps 2 | yes | 12 | 19 | 0.828 | 0.86 | 0.107 | 0.085 |
-| ZZ full, reps 1 | yes | 12 | 17 | 0.852 | 0.95 | 0.119 | 0.084 |
-| ZZ full, reps 2 | yes | 24 | 31 | 0.720 | 0.76 | 0.068 | 0.077 |
-| ZZ full, reps 3 | yes | 36 | 45 | 0.633 | 0.63 | 0.059 | 0.078 |
+| RY (VQC encoding) | 0 | 0.951 | 0.973 | 17 | 336 | **0.774** | 0.496 |
+| Z_r1 | 0 | 0.951 | 0.969 | 19 | 334 | **0.773** | 0.139 |
+| Z_r2 | 0 | 0.877 | 0.816 | 114 | 527 | 0.612 | 0.263 |
+| ZZ_linear_r1 | 6 | 0.864 | 0.852 | 92 | 425 | 0.671 | 0.075 |
+| ZZ_linear_r2 | 12 | 0.864 | 0.852 | 92 | 640 | 0.591 | 0.084 |
+| ZZ_full_r1 | 12 | 0.877 | 0.887 | 70 | 519 | 0.651 | 0.083 |
+| **ZZ_full_r2 (Qiskit default)** | 24 | 0.765 | 0.718 | **175** | 935 | **0.445** | 0.077 |
+| ZZ_full_r3 | 36 | 0.704 | 0.637 | 225 | 1390 | 0.328 | 0.080 |
 
-On this dataset, **adding entanglement and repetitions consistently makes the kernel worse**.
-The best map is the cheapest one, the product-state `Z` map, which needs no CX gates at all.
-For the deep entangled maps, the mean off-diagonal kernel value (≈0.077) is close to 1/2⁴ = 0.0625,
-which is the value expected for *Haar-random* states. The feature map scrambles the data so much
-that every pair of engines looks about equally dissimilar, and the SVM has nothing left to generalise from.
-This matches Person 2's VQC entanglement ablation and is a good point to cross-reference.
+For the entangling maps, the mean similarity between two *different* engines' states is about 0.08, close to 1/2⁴ = 0.0625, the value expected for **Haar-random states**. The circuit scrambles the data so thoroughly that every pair of points looks almost equally unrelated, and the SVM has nothing to generalise from. On this data, more entangling layers make it worse every time.
 
-Figure: `figures/e2_feature_maps.png`.
+**Shrinking the angles fixes it.** With α = 0.05–0.1, every feature map, including ZZ_full_r3, recovers a test F1 of 0.78–0.82 (right panel of `e1_bandwidth.png`). If α is too small instead, the kernel tends towards 1 for every pair, so the useful region is a band in the middle.
 
-## E3 — Kernel bandwidth: the fix
+**Caveat on α → 0:** with small angles, every map's kernel is close to a smooth, low-order function of x − x', much like a classical RBF kernel. Recovering classical performance this way shows the quantum kernel can be *tuned to behave like a good classical kernel*. It is **not** a quantum advantage.
 
-We scale every encoded angle by a factor α (Shaydulin & Wild, 2022, *"Importance of kernel bandwidth in quantum machine learning"*).
+## E2: Final comparison on the test set
 
-| ZZ full, reps 2 | α=1 (default) | α=0.5 | α=0.2 | **α=0.1** (best by CV) | α=0.05 |
+Rules: the "default" was fixed before seeing results. "Tuned" is the grid point with the best **validation** accuracy, with ties broken by validation recall and then by kernel-target alignment on train. Uncertainty comes from an **engine-level bootstrap**: the 4,291 test rows come from only 20 engines, and rows from one engine are strongly correlated, so we resample engines rather than rows.
+
+| Model | Test recall [95% CI] | Missed failures (of 620) | False alarms (of 3,671) | Test F1 [95% CI] | Misses with ≤10 cycles left |
 |---|---|---|---|---|---|
-| CV acc | 0.720 | 0.885 | 0.938 | **0.958** | 0.952 |
-| Test acc | 0.76 | 0.93 | 0.95 | **0.97** | 0.97 |
-| Kernel-target alignment | 0.068 | 0.118 | 0.207 | 0.332 | 0.428 |
+| QSVC default (ZZ_full_r2, α=1) | 0.718 [0.68, 0.76] | 175 | 935 | 0.445 [0.42, 0.47] | **58** |
+| QSVC tuned (Z_r2, α=0.3) | 0.966 [0.94, 0.99] | 21 | 316 | 0.780 [0.72, 0.84] | 0 |
+| QSVC, VQC encoding (RY, α=1) | 0.973 [0.95, 0.99] | 17 | 336 | 0.774 [0.71, 0.84] | 0 |
+| Classical SVM (RBF, same features) | 0.976 [0.96, 0.99] | 15 | 340 | 0.773 [0.71, 0.84] | 0 |
+| VQC entangled (Person 2, best seed) | 0.956 [0.92, 0.99] | 27 | 286 | 0.791 [0.74, 0.85] | 0 |
+| VQC no entanglement (Person 2, best seed) | 0.934 [0.88, 0.98] | 41 | 256 | 0.796 [0.74, 0.86] | 5 |
 
-The same circuit goes from 76% to 97% test accuracy. α was selected by training-set CV, not by test accuracy.
-There is a sweet spot: if α is too large, the kernel looks random (≈ Haar); if α is too small, the kernel
-approaches 1 everywhere and all points look the same (see the `Z_r2` curve at α=0.05, where the mean off-diagonal value is 0.99).
+Paired engine-bootstrap 95% CIs for the difference in F1:
+- Tuned QSVC − RBF SVM: [−0.003, +0.018]
+- Tuned QSVC − VQC entangled: [−0.022, +0.001]
+- Tuned QSVC − VQC no entanglement: [−0.036, +0.013]
+- Default QSVC − tuned QSVC: [−0.376, −0.295]
 
-**Caveat:** at small α, every rotation angle is small, so the kernel is close to a smooth, low-order function of $x - x'$, much like a classical RBF kernel.
-Reaching classical accuracy this way is evidence that the quantum kernel *can be tuned to behave like a good classical kernel*.
-It is **not** evidence of a quantum advantage.
+**So:**
+1. The tuned QSVC, the RBF SVM and both VQCs are **statistically indistinguishable**. They also trade recall against false alarms in slightly different ways: the kernel models catch a few more failures, while the VQCs raise fewer false alarms.
+2. The default QSVC is clearly worse. It also misses 58 rows with ≤10 cycles left, which are the most dangerous errors. Every tuned kernel model's misses are 22–30 cycles from failure, right at the label boundary (see `figures/e2_predicted_vs_rul.png`).
+3. Kernel heatmaps: `figures/e2_kernel_heatmaps.png`. The default kernel is almost diagonal, while the tuned and RBF kernels show clear class blocks.
 
-Figure: `figures/e3_bandwidth.png`.
+**The validation set is too small to pick a feature map.** 28 of the 64 configurations tie at the maximum validation accuracy (77/81 rows, recall 38/39), even though their test F1 ranges from 0.76 to 0.82. The protocol therefore can't separate the good configurations; it can only reject the bad ones. In particular, we **did not** report the best-on-test grid point (ZZ_linear_r2 at α=0.05, F1 0.820), because choosing it would mean selecting on the test set.
 
-## E4 — Learning curve (10 random balanced subsets per size)
+## E3: Learning curve (`figures/e3_learning_curve.png`)
 
-| Train size | QSVC default | QSVC α=0.1 | Classical RBF SVM |
+Balanced random subsets of the 319 training rows (10 subsets per size). C and γ are re-tuned on validation each time, and results are scored on the full test set.
+
+| Train rows | QSVC default F1 | QSVC tuned F1 | RBF SVM F1 |
 |---|---|---|---|
-| 20 | 0.59 ± 0.05 | 0.88 ± 0.11 | 0.94 ± 0.04 |
-| 40 | 0.61 ± 0.05 | 0.95 ± 0.02 | 0.94 ± 0.06 |
-| 80 | 0.68 ± 0.02 | 0.96 ± 0.01 | 0.96 ± 0.01 |
-| 160 | 0.74 ± 0.04 | 0.97 ± 0.01 | 0.97 ± 0.01 |
-| 400 | 0.76 | 0.97 | 0.97 |
+| 20 | 0.28 ± 0.02 | 0.77 ± 0.04 | 0.78 ± 0.04 |
+| 40 | 0.32 ± 0.03 | 0.77 ± 0.02 | 0.79 ± 0.03 |
+| 80 | 0.35 ± 0.03 | 0.77 ± 0.02 | 0.77 ± 0.03 |
+| 160 | 0.40 ± 0.03 | 0.79 ± 0.02 | 0.80 ± 0.02 |
+| 319 | 0.45 | 0.78 | 0.77 |
 
-The tuned QSVC matches the classical SVM from about 40 samples onward. It shows no sample-efficiency advantage.
-The default QSVC is still improving at 400 samples, which is consistent with a kernel that has to "see" almost every test point's neighbourhood.
+The tuned QSVC and the RBF SVM are already near their ceiling with 20 rows, so there's **no sample-efficiency advantage**. The default QSVC is still improving at 319 rows, which is consistent with a near-diagonal kernel that has to see almost every neighbourhood to make a prediction.
 
-Figure: `figures/e4_learning_curve.png`.
+## E4: Finite measurement shots (`figures/e4_shots.png`)
 
-## E5 — Finite-shot kernel estimation (tuned kernel, α=0.1)
-
-On real hardware each kernel entry is a sampled probability, so its error is ∝ 1/√shots.
+On hardware, each kernel entry is a sampled probability, Binomial(shots, k)/shots, so its error is ∝ 1/√shots.
 
 | Shots per entry | 16 | 64 | 256 | 1024 | 4096 | exact |
 |---|---|---|---|---|---|---|
-| Test acc (mean ± std, 10 repeats) | 0.907 ± 0.027 | 0.954 ± 0.017 | 0.963 ± 0.009 | 0.968 ± 0.004 | 0.970 ± 0.005 | 0.970 |
-| Kernel RMSE | 0.081 | 0.041 | 0.021 | 0.011 | 0.005 | 0 |
+| Test F1 (10 repeats) | 0.771 ± 0.007 | 0.782 ± 0.004 | 0.783 ± 0.003 | 0.782 ± 0.002 | 0.782 ± 0.001 | 0.780 |
+| Missed failures | 18.8 ± 4.4 | 18.5 ± 2.1 | 19.6 ± 1.0 | 20.6 ± 0.5 | 20.5 ± 1.0 | 21 |
+| Kernel RMSE | 0.079 | 0.040 | 0.020 | 0.010 | 0.005 | 0 |
 
-About 1k shots per entry is enough here. But the full model needs $\binom{400}{2} + 100\cdot400 = 119{,}800$
-kernel circuits, so 1k shots each is about 1.2×10⁸ circuit executions. This cost grows as $O(n^2)$ in the dataset size,
-and it is the main practical bottleneck for QSVC compared with a VQC, whose inference cost is $O(1)$ circuits per test point.
-Shot noise is only one source of error; Person 4's hardware-noise study covers gate and readout noise.
+The tuned kernel is very robust to shot noise: even 16–64 shots barely change the result. The real cost is the **number of circuits**. Training needs 319·318/2 = 50,721 kernel circuits, and scoring the test set needs 4,291 × 319 = 1,368,829 more: one per (test row, training row) pair. So prediction costs O(n_train) circuits per new engine reading. For comparison, the VQC needs one circuit per prediction. That is the main practical drawback of QSVC on hardware. Gate and readout noise are covered by Person 4.
 
-Figure: `figures/e5_shots.png`.
+## Takeaways for the report and video
 
-## Takeaways for the report / video
-
-1. **The QSVC is correct but not better.** With a well-chosen bandwidth it reaches classical accuracy (97%); with Qiskit's default settings it is significantly worse (76%).
-2. **More quantum is not better here.** More entanglement, more repetitions and larger angles all push the kernel toward "random-state" behaviour and hurt generalisation.
-3. **Bandwidth is the most important hyperparameter**, more important than the circuit architecture.
-4. **The cost scales as O(n²) kernel circuits**, each needing roughly 10³ shots. That is the main obstacle to running a QSVC at scale on hardware.
+1. **A QSVC can match the classical and VQC models, but it doesn't beat them.** Tuned, it reaches F1 ≈ 0.78 with 21 missed failures, statistically tied with an RBF SVM and both VQCs.
+2. **Qiskit's default ZZFeatureMap is a bad choice for this data:** F1 0.45, with 175 missed failures, 58 of them within 10 cycles of failure.
+3. **More quantum is not better here.** Entanglement, extra repetitions and large angles push the kernel towards "random-state" behaviour (mean overlap ≈ 1/2ⁿ). The kernel bandwidth matters more than the circuit's architecture.
+4. **The cost is in the number of circuits, not in shots:** about 1.4 million kernel circuits for this test set, compared with one circuit per prediction for the VQC.
 
 ## Limitations
 
-- There is one fixed train/test split (Person 1's seed 42) with 100 test points, so the CIs are about ±8%. We report bootstrap CIs and McNemar tests rather than relying on point estimates.
-- The 4 PCA features make this problem easy for classical models, which leaves little room for any quantum kernel to beat them.
-- Shot noise is simulated as binomial sampling of the exact kernel. Gate and readout noise are in Person 4's experiments.
+- Validation has only 81 rows (4 errors at best), so it can't rank the good configurations (see E2).
+- The test set has only 20 engines. CIs use an engine-level bootstrap, and they are wide (F1 roughly ±0.06).
+- The standardisation, PCA and [0, π] scaling are fitted on all 400 training rows, including the 81 validation rows. This doesn't touch the test set, but it makes validation slightly optimistic. It's a group-wide choice and isn't changed here.
+- The kernels are exact or shot-sampled only. Gate and readout noise are in Person 4's study.
+- The features are 4 PCA components of an easy problem, which leaves little room for any kernel to beat a classical RBF SVM.

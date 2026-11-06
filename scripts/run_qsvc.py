@@ -1,29 +1,34 @@
 """
 Person 3 - Quantum Support Vector Classifier (QSVC) experiments.
 
-Run from the repo root:
+Run from the repo root (about 15 min, no GPU needed):
 
-    python scripts/run_qsvc.py          # full run, headline kernel via FidelityQuantumKernel (~20 min)
-    python scripts/run_qsvc.py --fast   # statevector kernel everywhere (~2 min, identical numbers)
+    python scripts/run_qsvc.py
+
+Follows the group protocol in docs/vqc_handoff.md: data, the 319/81 engine-based
+train/validation split and the metrics all come from scripts/common.py; every choice
+(C, feature map, angle scale) is made on the validation rows; the 4,291-row test set
+is only used for reporting.
 
 Experiments
     E0  Sanity: FidelityQuantumKernel == FidelityStatevectorKernel, and qiskit's QSVC
         class == SVC on the precomputed kernel.
-    E1  Headline model: ZZFeatureMap (reps=2, full entanglement; Qiskit's default,
-        fixed *before* looking at results) vs classical SVMs on the same 4 features.
-        Bootstrap 95% CIs + exact McNemar test.
-    E2  Feature-map ablation: no entanglement (Z) vs linear / full ZZ entanglement,
-        1-3 repetitions. C chosen by 5-fold CV on train only.
-    E3  Kernel bandwidth: scale the encoded angles by alpha. Diagnoses kernel
-        concentration (off-diagonal kernel values collapsing).
-    E4  Learning curve: train size 20..400, 10 random balanced subsets each.
-    E5  Finite-shot kernel estimation: 16..4096 shots vs exact (10 repeats each).
+    E1  Grid over 8 feature maps x 8 angle scales (alpha). For each: C tuned on
+        validation, kernel diagnostics on train, test metrics recorded.
+        -> feature-map ablation (does entanglement help?) and bandwidth sweep.
+    E2  Final comparison on the test set: QSVC default (Qiskit's ZZFeatureMap, fixed
+        before any results), QSVC tuned (best grid point by validation), QSVC with the
+        VQC's encoding, classical RBF SVM on the same features, and the two VQCs.
+        Engine-level bootstrap CIs and error analysis (how close to failure the misses were).
+    E3  Learning curve: 20..319 training rows, 10 random balanced subsets each.
+    E4  Finite-shot kernel estimation: 16..4096 shots per kernel entry vs exact.
 
 Outputs -> results/qsvc/ (CSV + JSON) and results/qsvc/figures/ (PNG).
 """
 from __future__ import annotations
 
-import argparse
+import csv
+import itertools
 import json
 import os
 import sys
@@ -34,39 +39,46 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import csv
-from sklearn.metrics import confusion_matrix
-from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.svm import SVC
 
 sys.path.insert(0, os.path.dirname(__file__))
+from common import DATA_DIR, RESULTS_DIR, evaluate, load_data, load_units, train_val_split  # noqa: E402
 from qsvc_lib import (  # noqa: E402
+    C_GRID,
+    ENTANGLING,
     FEATURE_MAPS,
     balanced_subset,
-    bootstrap_ci,
     circuit_kernel,
     circuit_stats,
-    fit_eval,
-    gram_matrices,
+    engine_bootstrap,
+    fit_precomputed,
+    kernel_blocks,
     kernel_target_alignment,
-    load_data,
     make_feature_map,
-    mcnemar_exact,
     offdiag_stats,
     rbf_gram,
     sample_kernel,
+    score_test,
     statevector_kernel,
+    tune_C,
+    val_key,
 )
 
-OUT = "results/qsvc"
-FIG = os.path.join(OUT, "figures")
-MAIN_FM = "ZZ_full_r2"
+OUT = RESULTS_DIR / "qsvc"
+FIG = OUT / "figures"
+DEFAULT = ("ZZ_full_r2", 1.0)  # Qiskit's default ZZFeatureMap, fixed a priori
+ALPHAS = [0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5]
+GAMMA_GRID = [0.01, 0.03, 0.1, 0.3, 1, 3, 10]
 SEED = 0
-
+METRICS = ["accuracy", "precision", "recall", "f1", "false_negative_rate", "tp", "fp", "tn", "fn"]
 
 
 # ---------------------------------------------------------------------------
-# tiny table helpers (pandas is avoided: its DLLs are blocked on some locked-down Windows machines)
+# small helpers (no pandas: its DLLs are blocked on some locked-down Windows machines)
+def log(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
 def write_csv(rows, path):
     keys = list(dict.fromkeys(k for r in rows for k in r))
     with open(path, "w", newline="") as f:
@@ -77,284 +89,307 @@ def write_csv(rows, path):
 
 def fmt_table(rows, cols=None):
     cols = cols or list(dict.fromkeys(k for r in rows for k in r))
-    f = lambda v: f"{v:.3f}" if isinstance(v, float) else (f"({v[0]:.2f}, {v[1]:.2f})" if isinstance(v, tuple) else str(v))
+    f = lambda v: f"{v:.3f}" if isinstance(v, float) else str(v)
     cells = [[f(r.get(c, "")) for c in cols] for r in rows]
     w = [max(len(c), *(len(x[i]) for x in cells)) for i, c in enumerate(cols)]
     line = lambda xs: "  ".join(x.rjust(w[i]) for i, x in enumerate(xs))
     return "\n".join([line(cols)] + [line(x) for x in cells])
 
 
-def group_stats(rows, keys, vals):
-    groups = {}
-    for r in rows:
-        groups.setdefault(tuple(r[k] for k in keys), []).append(r)
-    out = []
-    for gk, rs in groups.items():
-        d = dict(zip(keys, gk))
-        for v in vals:
-            a = np.array([r[v] for r in rs], float)
-            d[f"{v}_mean"], d[f"{v}_std"] = float(a.mean()), float(a.std(ddof=1)) if len(a) > 1 else 0.0
-        out.append(d)
-    return out
+def prefixed(prefix, m):
+    return {f"{prefix}_{k}": m[k] for k in METRICS}
 
 
-def log(msg):
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+def label(fm, alpha):
+    return fm if alpha == 1.0 else f"{fm}, alpha={alpha}"
 
 
-def classical_svm(X_tr, y_tr, kernel):
-    grid = {"C": [0.01, 0.1, 0.3, 1, 3, 10, 30, 100]}
-    if kernel == "rbf":
-        grid["gamma"] = [0.01, 0.03, 0.1, 0.3, 1, 3]
-    cv = StratifiedKFold(5, shuffle=True, random_state=SEED)
-    gs = GridSearchCV(SVC(kernel=kernel), grid, cv=cv).fit(X_tr, y_tr)
-    return gs.best_estimator_, gs.best_params_, gs.best_score_
+def rbf_svm(X_tr, X_va, y_tr, y_va):
+    """Classical RBF SVM on the same [0, pi] features, C and gamma tuned on validation."""
+    best = None
+    for c, g in itertools.product(C_GRID, GAMMA_GRID):
+        m = SVC(kernel="rbf", C=c, gamma=g).fit(X_tr, y_tr)
+        v = evaluate(y_va, m.predict(X_va))
+        if best is None or val_key(v) > val_key(best[1]):
+            best = (dict(C=c, gamma=g), v, m)
+    return best
+
+
+class LazyKernels(dict):
+    """Recompute a (feature map, alpha) kernel only when a later experiment needs it
+    (keeping all 64 grid kernels would take ~0.8 GB)."""
+
+    def __init__(self, X_tr, X_va, X_te):
+        super().__init__()
+        self.X = (X_tr, X_va, X_te)
+
+    def __missing__(self, key):
+        self[key] = kernel_blocks(make_feature_map(key[0]), *self.X, alpha=key[1])
+        return self[key]
 
 
 # ---------------------------------------------------------------------------
 def e0_sanity(X_tr, y_tr):
     log("E0 sanity checks")
     from qiskit_machine_learning.algorithms import QSVC
-    from sklearn.svm import SVC as _SVC
 
-    fm = make_feature_map(MAIN_FM)
+    fm = make_feature_map(DEFAULT[0])
     sub = X_tr[:30]
-    K_circ = circuit_kernel(fm).evaluate(sub)
-    K_sv = statevector_kernel(fm).evaluate(sub)
-    kdiff = float(np.abs(K_circ - K_sv).max())
-
-    ksv = statevector_kernel(fm)
-    q = QSVC(quantum_kernel=ksv, C=1.0).fit(X_tr[:80], y_tr[:80])
-    s = _SVC(kernel="precomputed", C=1.0).fit(ksv.evaluate(X_tr[:80]), y_tr[:80])
-    agree = float(np.mean(q.predict(X_tr[80:160]) == s.predict(ksv.evaluate(X_tr[80:160], X_tr[:80]))))
-    res = {"max_abs_kernel_diff_circuit_vs_statevector": kdiff, "QSVC_vs_precomputed_SVC_agreement": agree}
+    kdiff = float(np.abs(circuit_kernel(fm).evaluate(sub) - statevector_kernel(fm).evaluate(sub)).max())
+    k = statevector_kernel(fm)
+    q = QSVC(quantum_kernel=k, C=1.0).fit(X_tr[:80], y_tr[:80])
+    s = SVC(kernel="precomputed", C=1.0).fit(k.evaluate(X_tr[:80]), y_tr[:80])
+    agree = float(np.mean(q.predict(X_tr[80:160]) == s.predict(k.evaluate(X_tr[80:160], X_tr[:80]))))
+    res = {"max_abs_kernel_diff_circuit_vs_statevector": kdiff, "QSVC_class_vs_precomputed_SVC_agreement": agree}
     log(f"   {res}")
     return res
 
 
-def e1_headline(X_tr, X_te, y_tr, y_te, fast):
-    log(f"E1 headline QSVC ({MAIN_FM}) using {'statevector' if fast else 'FidelityQuantumKernel (sampler)'} kernel")
-    fm = make_feature_map(MAIN_FM)
-    kern = statevector_kernel(fm) if fast else circuit_kernel(fm)
-    t0 = time.time()
-    K_tr, K_te = gram_matrices(kern, X_tr, X_te)
-    kernel_time = time.time() - t0
-    log(f"   kernel computed in {kernel_time:.1f}s")
-    np.savez_compressed(os.path.join(OUT, "kernel_main.npz"), K_train=K_tr, K_test=K_te)
+def e1_grid(X_tr, X_va, X_te, y_tr, y_va, y_te):
+    log(f"E1 grid: {len(FEATURE_MAPS)} feature maps x {len(ALPHAS)} angle scales")
+    rows = []
+    for fm_name in FEATURE_MAPS:
+        fm = make_feature_map(fm_name)
+        stats = circuit_stats(fm)
+        for alpha in ALPHAS:
+            K = kernel_blocks(fm, X_tr, X_va, X_te, alpha)
+            C, v, model = tune_C(K, y_tr, y_va)
+            t, _, _ = score_test(model, K["te"], y_te)
+            rows.append({"feature_map": fm_name, "alpha": alpha, "entangling": ENTANGLING[fm_name], **stats,
+                         "C": C, "n_support": int(model.n_support_.sum()),
+                         "kta_train": kernel_target_alignment(K["tr"], y_tr), **offdiag_stats(K["tr"]),
+                         **prefixed("val", v), **prefixed("test", t)})
+        log(f"   {fm_name} done")
+    write_csv(rows, OUT / "e1_grid.csv")
+    return rows
 
-    q = fit_eval(K_tr, K_te, y_tr, y_te, seed=SEED)
-    rows = [{"model": f"QSVC ({MAIN_FM})", "cv_acc": q["cv_acc"], "params": f"C={q['C']}",
-             "test_acc": q["test_acc"], "test_f1": q["test_f1"], "test_auc": q["test_auc"],
-             "n_support": q["n_support"], "ci95": bootstrap_ci(y_te, q["pred"])}]
-    preds = {"QSVC": q["pred"]}
 
-    for kname in ["rbf", "linear"]:
-        m, p, cv = classical_svm(X_tr, y_tr, kname)
-        pred = m.predict(X_te)
-        from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
-        rows.append({"model": f"Classical SVM ({kname})", "cv_acc": cv, "params": str(p),
-                     "test_acc": accuracy_score(y_te, pred), "test_f1": f1_score(y_te, pred),
-                     "test_auc": roc_auc_score(y_te, m.decision_function(X_te)),
-                     "n_support": int(m.n_support_.sum()), "ci95": bootstrap_ci(y_te, pred)})
-        preds[f"SVM_{kname}"] = pred
-        if kname == "rbf":
-            rbf_gamma = p["gamma"]
+def plot_grid(rows):
+    # --- feature-map ablation at alpha = 1 (the circuits as Qiskit defines them)
+    a1 = [r for r in rows if r["alpha"] == 1.0]
+    x = np.arange(len(a1))
+    col = ["tab:blue" if r["entangling"] else "tab:gray" for r in a1]
+    names = [r["feature_map"] for r in a1]
+    fig, ax = plt.subplots(1, 2, figsize=(12, 4.2))
+    ax[0].bar(x - 0.2, [r["val_accuracy"] for r in a1], 0.4, color=col, alpha=0.45, label="validation accuracy (selection)")
+    ax[0].bar(x + 0.2, [r["test_f1"] for r in a1], 0.4, color=col, label="test F1")
+    ax[0].set_xticks(x, names, rotation=30, ha="right"); ax[0].set_ylim(0.3, 1)
+    ax[0].set_title("Feature maps at alpha = 1 (grey = no entanglement)"); ax[0].legend(fontsize=8)
+    ax[1].bar(x, [r["kta_train"] for r in a1], color=col)
+    ax2 = ax[1].twinx()
+    ax2.plot(x, [r["k_mean"] for r in a1], "ro-")
+    ax2.axhline(1 / 16, color="r", ls=":", lw=0.8)
+    ax2.text(len(x) - 0.5, 1 / 16, "Haar 1/2^n", color="r", fontsize=7, ha="right", va="bottom")
+    ax[1].set_xticks(x, names, rotation=30, ha="right")
+    ax[1].set_ylabel("kernel-target alignment (train)"); ax2.set_ylabel("mean off-diagonal kernel value", color="r")
+    ax[1].set_title("Kernel quality")
+    fig.tight_layout(); fig.savefig(FIG / "e1_feature_maps.png", dpi=150); plt.close(fig)
 
-    write_csv(rows, os.path.join(OUT, "e1_headline.csv"))
-    log("\n" + fmt_table(rows, ["model", "cv_acc", "test_acc", "test_f1", "test_auc", "n_support", "ci95"]))
+    # --- bandwidth sweep
+    show = ["RY (VQC encoding)", "Z_r2", "ZZ_linear_r2", "ZZ_full_r2", "ZZ_full_r3"]
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4))
+    for i, fm in enumerate(show):
+        g = [r for r in rows if r["feature_map"] == fm]
+        a = [r["alpha"] for r in g]
+        c = f"C{i}"
+        ax[0].plot(a, [r["val_accuracy"] for r in g], "o-", color=c, label=fm)
+        ax[1].plot(a, [r["test_f1"] for r in g], "o-", color=c, label=fm)
+        ax[2].plot(a, [r["k_mean"] for r in g], "o-", color=c, label=fm)
+    ax[2].axhline(1 / 16, color="k", ls="--", lw=0.8); ax[2].text(0.06, 0.07, "Haar-random 1/2^n", fontsize=7)
+    for a_, t in zip(ax, ["validation accuracy (used for selection)", "test F1", "mean off-diagonal kernel value (train)"]):
+        a_.set_xscale("log"); a_.set_xlabel("angle scale alpha"); a_.set_title(t)
+    ax[2].set_yscale("log"); ax[0].legend(fontsize=7)
+    fig.tight_layout(); fig.savefig(FIG / "e1_bandwidth.png", dpi=150); plt.close(fig)
 
-    mc = {k: mcnemar_exact(y_te, preds["QSVC"], v) for k, v in preds.items() if k != "QSVC"}
-    log(f"   McNemar QSVC vs classical: {mc}")
 
-    # --- figures: kernel heatmaps (quantum vs RBF), confusion matrix
+def e2_compare(rows, kernels, X_tr, X_va, X_te, y_tr, y_va, y_te, units_te, rul_te):
+    log("E2 final comparison on the test set")
+    # tuned = best grid point on validation; ties -> higher train kernel-target alignment
+    best = max(rows, key=lambda r: ((round(r["val_accuracy"], 6), round(r["val_recall"], 6)), r["kta_train"]))
+    picks = {
+        "QSVC default (ZZ_full_r2)": DEFAULT,
+        f"QSVC tuned ({label(best['feature_map'], best['alpha'])})": (best["feature_map"], best["alpha"]),
+        "QSVC, VQC encoding (RY)": ("RY (VQC encoding)", 1.0),
+    }
+    table, preds, scores = [], {}, {}
+    for name, key in picks.items():
+        K = kernels[key]
+        C, v, model = tune_C(K, y_tr, y_va)
+        t, p, s = score_test(model, K["te"], y_te)
+        preds[name], scores[name] = p, s
+        table.append({"model": name, "params": f"C={C}", "n_support": int(model.n_support_.sum()),
+                      **prefixed("val", v), **prefixed("test", t)})
+
+    params, v, m = rbf_svm(X_tr, X_va, y_tr, y_va)
+    p = m.predict(X_te)
+    preds["Classical SVM (RBF, same features)"] = p
+    table.append({"model": "Classical SVM (RBF, same features)", "params": str(params),
+                  "n_support": int(m.n_support_.sum()), **prefixed("val", v), **prefixed("test", evaluate(y_te, p))})
+
+    for vqc in ["entangled", "no_entanglement"]:
+        d = np.load(RESULTS_DIR / "vqc" / f"best_{vqc}.npz")
+        p = (d["test_proba"] >= 0.5).astype(int)
+        name = f"VQC {vqc} (Person 2, best seed)"
+        preds[name] = p
+        table.append({"model": name, "params": f"seed={int(d['seed'])}", "n_support": "",
+                      **prefixed("test", evaluate(y_te, p))})
+
+    # engine-level bootstrap
+    ci_f1, diff_f1 = engine_bootstrap(y_te, preds, units_te, "f1")
+    ci_rec, _ = engine_bootstrap(y_te, preds, units_te, "recall")
+    for r in table:
+        r["test_f1_ci95"] = "[{:.3f}, {:.3f}]".format(*ci_f1[r["model"]])
+        r["test_recall_ci95"] = "[{:.3f}, {:.3f}]".format(*ci_rec[r["model"]])
+        miss = rul_te[(y_te == 1) & (preds[r["model"]] == 0)]
+        r["missed_fail_min_rul"] = int(miss.min()) if len(miss) else ""
+        r["missed_fail_median_rul"] = float(np.median(miss)) if len(miss) else ""
+        r["missed_fail_rul_le_10"] = int((miss <= 10).sum())
+    write_csv(table, OUT / "e2_comparison.csv")
+    log("\n" + fmt_table(table, ["model", "val_accuracy", "test_recall", "test_fn", "test_fp", "test_f1",
+                                 "test_f1_ci95", "missed_fail_min_rul", "missed_fail_rul_le_10"]))
+
+    # --- figures: kernel heatmaps and P(miss) vs remaining cycles
+    tuned_key = picks[[k for k in picks if k.startswith("QSVC tuned")][0]]
     order = np.argsort(y_tr, kind="stable")
-    K_rbf = rbf_gram(X_tr, X_tr, rbf_gamma)
-    fig, ax = plt.subplots(1, 2, figsize=(10, 4.4))
-    for a, K, title in [(ax[0], K_tr, f"Quantum kernel ({MAIN_FM})"), (ax[1], K_rbf, f"RBF kernel (gamma={rbf_gamma})")]:
+    n0 = int((y_tr == 0).sum())
+    K_rbf = rbf_gram(X_tr, X_tr, params["gamma"])
+    mats = [(kernels[DEFAULT]["tr"], "QSVC default (ZZ_full_r2)"),
+            (kernels[tuned_key]["tr"], f"QSVC tuned ({label(*tuned_key)})"),
+            (K_rbf, f"RBF kernel (gamma={params['gamma']})")]
+    fig, ax = plt.subplots(1, 3, figsize=(14, 4.4))
+    for a, (K, t) in zip(ax, mats):
         im = a.imshow(K[np.ix_(order, order)], cmap="viridis", vmin=0, vmax=1)
-        n0 = int((y_tr == 0).sum())
         a.axhline(n0 - 0.5, color="w", lw=0.8); a.axvline(n0 - 0.5, color="w", lw=0.8)
-        a.set_title(f"{title}\nKTA={kernel_target_alignment(K, y_tr):.3f}")
+        a.set_title(f"{t}\nKTA={kernel_target_alignment(K, y_tr):.3f}", fontsize=9)
         a.set_xticks([]); a.set_yticks([])
     fig.colorbar(im, ax=ax, shrink=0.8)
-    fig.suptitle("Training Gram matrices, sorted by label (healthy | near-failure)")
-    fig.savefig(os.path.join(FIG, "e1_kernel_heatmaps.png"), dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    fig.suptitle("Training Gram matrices sorted by label (healthy | fails within 30 cycles)")
+    fig.savefig(FIG / "e2_kernel_heatmaps.png", dpi=150, bbox_inches="tight"); plt.close(fig)
 
-    cm = confusion_matrix(y_te, preds["QSVC"])
-    fig, a = plt.subplots(figsize=(3.6, 3.2))
-    a.imshow(cm, cmap="Blues")
-    for i in range(2):
-        for j in range(2):
-            a.text(j, i, cm[i, j], ha="center", va="center", fontsize=14)
-    a.set_xticks([0, 1], ["healthy", "fail<=30"]); a.set_yticks([0, 1], ["healthy", "fail<=30"])
-    a.set_xlabel("predicted"); a.set_ylabel("true"); a.set_title(f"QSVC test confusion matrix")
-    fig.savefig(os.path.join(FIG, "e1_confusion_qsvc.png"), dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    bins = np.arange(0, 61, 5)
+    fig, a = plt.subplots(figsize=(7, 4))
+    for i, (name, p) in enumerate(preds.items()):
+        flagged = [p[(rul_te >= lo) & (rul_te < lo + 5)].mean() for lo in bins[:-1]]
+        a.plot(bins[:-1] + 2.5, flagged, "o-", ms=3, label=name, color=f"C{i}")
+    a.axvline(30.5, color="k", ls="--", lw=0.8); a.text(31.5, 0.05, "label boundary (RUL = 30)", fontsize=7)
+    a.set_xlabel("remaining useful life (cycles)"); a.set_ylabel("fraction predicted 'fails'")
+    a.set_title("Test predictions vs true remaining life"); a.legend(fontsize=6)
+    fig.tight_layout(); fig.savefig(FIG / "e2_predicted_vs_rul.png", dpi=150); plt.close(fig)
 
-    return {"kernel_seconds": kernel_time, "kernel_backend": "statevector" if fast else "FidelityQuantumKernel",
-            "table": rows, "mcnemar": mc,
-            "kta": kernel_target_alignment(K_tr, y_tr), **offdiag_stats(K_tr)}, K_tr, K_te
+    return {"tuned_choice": {"feature_map": tuned_key[0], "alpha": tuned_key[1]}, "table": table,
+            "f1_ci95": ci_f1, "recall_ci95": ci_rec, "f1_diff_ci95": diff_f1}, tuned_key
 
 
-def e2_feature_maps(X_tr, X_te, y_tr, y_te):
-    log("E2 feature-map ablation")
-    rows = []
-    for name in FEATURE_MAPS:
-        fm = make_feature_map(name)
-        K_tr, K_te = gram_matrices(statevector_kernel(fm), X_tr, X_te)
-        r = fit_eval(K_tr, K_te, y_tr, y_te, seed=SEED)
-        rows.append({"feature_map": name, "entangling": not name.startswith("Z_"), **circuit_stats(fm),
-                     "C": r["C"], "cv_acc": r["cv_acc"], "test_acc": r["test_acc"], "test_auc": r["test_auc"],
-                     "n_support": r["n_support"], "kta": kernel_target_alignment(K_tr, y_tr), **offdiag_stats(K_tr)})
-    write_csv(rows, os.path.join(OUT, "e2_feature_maps.csv"))
-    log("\n" + fmt_table(rows))
-    df = {k: [r[k] for r in rows] for k in rows[0]}
-
-    fig, ax = plt.subplots(1, 2, figsize=(11, 4))
-    x = np.arange(len(rows))
-    colors = ["tab:gray" if not e else "tab:blue" for e in df["entangling"]]
-    ax[0].bar(x - 0.2, df["cv_acc"], 0.4, color=colors, alpha=0.5, label="5-fold CV (train)")
-    ax[0].bar(x + 0.2, df["test_acc"], 0.4, color=colors, label="test")
-    ax[0].set_xticks(x, df["feature_map"], rotation=30, ha="right"); ax[0].set_ylim(0.5, 1)
-    ax[0].set_ylabel("accuracy"); ax[0].set_title("Accuracy (grey = no entanglement)"); ax[0].legend()
-    ax[1].bar(x, df["kta"], color=colors)
-    ax2 = ax[1].twinx(); ax2.plot(x, df["k_std"], "ro-", label="std of off-diag K")
-    ax[1].set_xticks(x, df["feature_map"], rotation=30, ha="right")
-    ax[1].set_ylabel("kernel-target alignment"); ax2.set_ylabel("off-diagonal kernel std", color="r")
-    ax[1].set_title("Kernel quality")
-    fig.tight_layout(); fig.savefig(os.path.join(FIG, "e2_feature_maps.png"), dpi=150); plt.close(fig)
-    return rows
-
-
-def e3_bandwidth(X_tr, X_te, y_tr, y_te):
-    log("E3 bandwidth (angle scaling) sweep")
-    rows = []
-    for fm_name in [MAIN_FM, "ZZ_full_r3", "Z_r2"]:
-        fm = make_feature_map(fm_name)
-        for alpha in [0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5]:
-            K_tr, K_te = gram_matrices(statevector_kernel(fm), alpha * X_tr, alpha * X_te)
-            r = fit_eval(K_tr, K_te, y_tr, y_te, seed=SEED)
-            rows.append({"feature_map": fm_name, "alpha": alpha, "C": r["C"], "cv_acc": r["cv_acc"],
-                         "test_acc": r["test_acc"], "test_auc": r["test_auc"],
-                         "kta": kernel_target_alignment(K_tr, y_tr), **offdiag_stats(K_tr)})
-    write_csv(rows, os.path.join(OUT, "e3_bandwidth.csv"))
-    log("\n" + fmt_table(rows))
-
-    fig, ax = plt.subplots(1, 2, figsize=(11, 4))
-    for i, fm_name in enumerate(dict.fromkeys(r["feature_map"] for r in rows)):
-        g = {k: [r[k] for r in rows if r["feature_map"] == fm_name] for k in rows[0]}
-        c = f"C{i}"
-        ax[0].plot(g["alpha"], g["test_acc"], "o-", color=c, label=f"{fm_name} test")
-        ax[0].plot(g["alpha"], g["cv_acc"], "x--", color=c, alpha=0.5, label=f"{fm_name} CV")
-        ax[1].plot(g["alpha"], g["k_std"], "o-", color=c, label=f"{fm_name} std")
-        ax[1].plot(g["alpha"], g["k_mean"], "s:", color=c, alpha=0.5, label=f"{fm_name} mean")
-    ax[1].axhline(1 / 2**4, color="k", lw=0.8, ls="--")
-    ax[1].text(0.06, 1 / 2**4 + 0.01, "Haar-random mean 1/2^n", fontsize=7)
-    ax[0].set_xscale("log"); ax[0].set_xlabel("angle scale alpha"); ax[0].set_ylabel("accuracy")
-    ax[0].set_title("Accuracy vs kernel bandwidth"); ax[0].legend(fontsize=7)
-    ax[1].set_xscale("log"); ax[1].set_yscale("log"); ax[1].set_xlabel("angle scale alpha")
-    ax[1].set_ylabel("off-diagonal kernel value")
-    ax[1].set_title("Kernel statistics (too smooth <-> too random)"); ax[1].legend(fontsize=6, ncol=2)
-    fig.tight_layout(); fig.savefig(os.path.join(FIG, "e3_bandwidth.png"), dpi=150); plt.close(fig)
-    return rows
-
-
-def e4_learning_curve(X_tr, X_te, y_tr, y_te, K_main, best_alpha):
-    log(f"E4 learning curve (QSVC default, QSVC alpha={best_alpha}, RBF SVM)")
-    fm = make_feature_map(MAIN_FM)
-    K_bw = gram_matrices(statevector_kernel(fm), best_alpha * X_tr, best_alpha * X_te)
-    kernels = {f"QSVC {MAIN_FM}": K_main, f"QSVC {MAIN_FM} alpha={best_alpha}": K_bw}
+def e3_learning_curve(kernels, tuned_key, X_tr, X_va, X_te, y_tr, y_va, y_te):
+    log("E3 learning curve")
+    models = {"QSVC default": kernels[DEFAULT], f"QSVC tuned ({label(*tuned_key)})": kernels[tuned_key]}
     rng = np.random.default_rng(SEED)
     rows = []
-    for n in [20, 40, 80, 160, 400]:
-        for rep in range(10 if n < 400 else 1):
-            idx = balanced_subset(y_tr, n, rng) if n < 400 else np.arange(400)
-            for name, (Ktr, Kte) in kernels.items():
-                r = fit_eval(Ktr[np.ix_(idx, idx)], Kte[:, idx], y_tr[idx], y_te, seed=SEED)
-                rows.append({"model": name, "n_train": n, "rep": rep, "test_acc": r["test_acc"]})
-            m, _, _ = classical_svm(X_tr[idx], y_tr[idx], "rbf")
-            rows.append({"model": "Classical SVM (rbf)", "n_train": n, "rep": rep,
-                         "test_acc": float(np.mean(m.predict(X_te) == y_te))})
-    write_csv(rows, os.path.join(OUT, "e4_learning_curve.csv"))
-    agg = group_stats(rows, ["model", "n_train"], ["test_acc"])
+    for n in [20, 40, 80, 160, len(y_tr)]:
+        for rep in range(10 if n < len(y_tr) else 1):
+            idx = balanced_subset(y_tr, n, rng) if n < len(y_tr) else np.arange(len(y_tr))
+            for name, K in models.items():
+                Ks = {"tr": K["tr"][np.ix_(idx, idx)], "va": K["va"][:, idx]}
+                _, _, m = tune_C(Ks, y_tr[idx], y_va)
+                t = evaluate(y_te, m.predict(K["te"][:, idx]))
+                rows.append({"model": name, "n_train": n, "rep": rep, **prefixed("test", t)})
+            _, _, m = rbf_svm(X_tr[idx], X_va, y_tr[idx], y_va)
+            rows.append({"model": "Classical SVM (RBF)", "n_train": n, "rep": rep,
+                         **prefixed("test", evaluate(y_te, m.predict(X_te)))})
+    write_csv(rows, OUT / "e3_learning_curve.csv")
+
+    agg = []
+    for name in dict.fromkeys(r["model"] for r in rows):
+        for n in dict.fromkeys(r["n_train"] for r in rows):
+            g = [r for r in rows if r["model"] == name and r["n_train"] == n]
+            d = {"model": name, "n_train": n}
+            for k in ["test_f1", "test_recall"]:
+                a = np.array([r[k] for r in g])
+                d[f"{k}_mean"], d[f"{k}_std"] = float(a.mean()), float(a.std(ddof=1)) if len(a) > 1 else 0.0
+            agg.append(d)
     log("\n" + fmt_table(agg))
 
-    fig, a = plt.subplots(figsize=(6, 4))
-    for name in dict.fromkeys(r["model"] for r in agg):
+    fig, ax = plt.subplots(1, 2, figsize=(11, 4))
+    for i, name in enumerate(dict.fromkeys(r["model"] for r in agg)):
         g = [r for r in agg if r["model"] == name]
-        a.errorbar([r["n_train"] for r in g], [r["test_acc_mean"] for r in g], yerr=[r["test_acc_std"] for r in g],
-                   marker="o", capsize=3, label=name)
-    a.set_xscale("log"); a.set_xticks([20, 40, 80, 160, 400], ["20", "40", "80", "160", "400"]); a.minorticks_off()
-    a.set_xlabel("training samples"); a.set_ylabel("test accuracy (mean ± std, 10 subsets)")
-    a.set_title("Learning curve"); a.legend(fontsize=8)
-    fig.tight_layout(); fig.savefig(os.path.join(FIG, "e4_learning_curve.png"), dpi=150); plt.close(fig)
+        for a, k in zip(ax, ["test_f1", "test_recall"]):
+            a.errorbar([r["n_train"] for r in g], [r[f"{k}_mean"] for r in g], yerr=[r[f"{k}_std"] for r in g],
+                       marker="o", capsize=3, label=name, color=f"C{i}")
+    ticks = sorted({r["n_train"] for r in agg})
+    for a, t in zip(ax, ["test F1", "test recall"]):
+        a.set_xscale("log"); a.set_xticks(ticks, [str(t_) for t_ in ticks]); a.minorticks_off()
+        a.set_xlabel("training rows"); a.set_title(f"{t} (mean ± std over 10 subsets)")
+    ax[0].legend(fontsize=8)
+    fig.tight_layout(); fig.savefig(FIG / "e3_learning_curve.png", dpi=150); plt.close(fig)
     return agg
 
 
-def e5_shots(X_tr, X_te, y_tr, y_te, alpha):
-    log(f"E5 finite-shot kernel estimation ({MAIN_FM}, alpha={alpha})")
-    fm = make_feature_map(MAIN_FM)
-    Xa, Xb = alpha * X_tr, alpha * X_te
-    K_exact = gram_matrices(statevector_kernel(fm), Xa, Xb)
-    r_exact = fit_eval(*K_exact, y_tr, y_te, seed=SEED)
-    rows = [{"shots": "exact", "rep": 0, "test_acc": r_exact["test_acc"], "kernel_rmse": 0.0}]
+def e4_shots(kernels, tuned_key, y_tr, y_va, y_te):
+    log(f"E4 finite-shot kernel estimation ({label(*tuned_key)})")
+    K = kernels[tuned_key]
+    C, _, m = tune_C(K, y_tr, y_va)
+    exact = evaluate(y_te, m.predict(K["te"]))
     rng = np.random.default_rng(SEED)
+    rows = []
     for shots in [16, 64, 256, 1024, 4096]:
         for rep in range(10):
-            K_tr = sample_kernel(K_exact[0], shots, rng, symmetric=True)
-            K_te = sample_kernel(K_exact[1], shots, rng, symmetric=False)
-            r = fit_eval(K_tr, K_te, y_tr, y_te, C=r_exact["C"], seed=SEED)
-            rmse = float(np.sqrt(np.mean((K_tr - K_exact[0]) ** 2)))
-            rows.append({"shots": shots, "rep": rep, "test_acc": r["test_acc"], "kernel_rmse": rmse})
-    write_csv(rows, os.path.join(OUT, "e5_shots.csv"))
-    agg = group_stats([r for r in rows if r["shots"] != "exact"], ["shots"], ["test_acc", "kernel_rmse"])
-    log("\n" + fmt_table(agg) + f"\n exact test_acc = {r_exact['test_acc']:.3f}")
+            Ktr = sample_kernel(K["tr"], shots, rng, symmetric=True)
+            Kte = sample_kernel(K["te"], shots, rng, symmetric=False)
+            t = evaluate(y_te, fit_precomputed(Ktr, y_tr, C).predict(Kte))
+            rows.append({"shots": shots, "rep": rep, "kernel_rmse_train": float(np.sqrt(np.mean((Ktr - K["tr"]) ** 2))),
+                         **prefixed("test", t)})
+    write_csv(rows, OUT / "e4_shots.csv")
+    agg = []
+    for s in dict.fromkeys(r["shots"] for r in rows):
+        g = [r for r in rows if r["shots"] == s]
+        d = {"shots": s}
+        for k in ["test_f1", "test_recall", "test_fn", "kernel_rmse_train"]:
+            a = np.array([r[k] for r in g], float)
+            d[f"{k}_mean"], d[f"{k}_std"] = float(a.mean()), float(a.std(ddof=1))
+        agg.append(d)
+    log("\n" + fmt_table(agg) + f"\n exact: f1={exact['f1']:.3f} recall={exact['recall']:.3f} fn={exact['fn']}")
 
     s = np.array([r["shots"] for r in agg])
-    acc_m = np.array([r["test_acc_mean"] for r in agg]); acc_s = np.array([r["test_acc_std"] for r in agg])
-    rmse = np.array([r["kernel_rmse_mean"] for r in agg])
     fig, ax = plt.subplots(1, 2, figsize=(10, 3.8))
-    ax[0].errorbar(s, acc_m, yerr=acc_s, marker="o", capsize=3, label="finite shots")
-    ax[0].axhline(r_exact["test_acc"], color="k", ls="--", label="exact kernel")
-    ax[0].set_xscale("log", base=2); ax[0].set_xlabel("shots per kernel entry"); ax[0].set_ylabel("test accuracy"); ax[0].legend()
-    ax[0].set_title("Accuracy vs shot budget")
+    for k, c, lab in [("test_f1", "C0", "F1"), ("test_recall", "C1", "recall")]:
+        ax[0].errorbar(s, [r[f"{k}_mean"] for r in agg], yerr=[r[f"{k}_std"] for r in agg], marker="o",
+                       capsize=3, color=c, label=f"{lab}, finite shots")
+        ax[0].axhline(exact[k.split("_", 1)[1]], color=c, ls="--", lw=0.8, label=f"{lab}, exact kernel")
+    ax[0].set_xscale("log", base=2); ax[0].set_xlabel("shots per kernel entry"); ax[0].legend(fontsize=7)
+    ax[0].set_title("Test metrics vs shot budget")
+    rmse = np.array([r["kernel_rmse_train_mean"] for r in agg])
     ax[1].loglog(s, rmse, "o-", label="measured")
     ax[1].loglog(s, rmse[0] * np.sqrt(s[0] / s), "k--", label=r"$\propto 1/\sqrt{shots}$")
     ax[1].set_xlabel("shots per kernel entry"); ax[1].set_ylabel("kernel RMSE vs exact"); ax[1].legend()
     ax[1].set_title("Kernel estimation error")
-    fig.tight_layout(); fig.savefig(os.path.join(FIG, "e5_shots.png"), dpi=150); plt.close(fig)
-    return {"exact_test_acc": r_exact["test_acc"], "C": r_exact["C"],
-            "by_shots": agg}
+    fig.tight_layout(); fig.savefig(FIG / "e4_shots.png", dpi=150); plt.close(fig)
+    n_tr, n_te = len(y_tr), len(y_te)
+    return {"C": C, "exact": exact, "by_shots": agg,
+            "circuits_needed": {"train": n_tr * (n_tr - 1) // 2, "test": n_te * n_tr}}
 
 
 # ---------------------------------------------------------------------------
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--fast", action="store_true", help="use the statevector kernel for E1 too")
-    args = ap.parse_args()
-    os.makedirs(FIG, exist_ok=True)
+    FIG.mkdir(parents=True, exist_ok=True)
+    X_full, X_te, y_full, y_te = load_data(quantum=True)
+    X_tr, X_va, y_tr, y_va = train_val_split(X_full, y_full)
+    _, units_te = load_units()
+    rul_te = np.load(DATA_DIR / "cmapss_qml_4f_500.npz")["rul_test"]
+    log(f"train {X_tr.shape} ({y_tr.mean():.0%} failing) | val {X_va.shape} ({y_va.mean():.0%}) | "
+        f"test {X_te.shape} ({y_te.mean():.1%}, {len(np.unique(units_te))} engines)")
 
-    X_tr, X_te, y_tr, y_te = load_data()
-    log(f"data: train {X_tr.shape} (pos={y_tr.sum()}), test {X_te.shape} (pos={y_te.sum()})")
-
-    summary = {"main_feature_map": MAIN_FM}
+    summary = {"default": {"feature_map": DEFAULT[0], "alpha": DEFAULT[1]}}
     summary["e0_sanity"] = e0_sanity(X_tr, y_tr)
-    summary["e1_headline"], K_tr, K_te = e1_headline(X_tr, X_te, y_tr, y_te, args.fast)
-    summary["e2_feature_maps"] = e2_feature_maps(X_tr, X_te, y_tr, y_te)
-    bw = e3_bandwidth(X_tr, X_te, y_tr, y_te)
-    summary["e3_bandwidth"] = bw
-    # choose alpha by *CV* accuracy on train (not test) to avoid test-set selection
-    main_bw = [r for r in bw if r["feature_map"] == MAIN_FM]
-    best_alpha = max(main_bw, key=lambda r: (r["cv_acc"], -abs(np.log(r["alpha"]))))["alpha"]
-    summary["e3_best_alpha_by_cv"] = best_alpha
-    log(f"   best alpha by CV: {best_alpha}")
-    summary["e4_learning_curve"] = e4_learning_curve(X_tr, X_te, y_tr, y_te, (K_tr, K_te), best_alpha)
-    summary["e5_shots"] = e5_shots(X_tr, X_te, y_tr, y_te, best_alpha)
-
-    with open(os.path.join(OUT, "summary.json"), "w") as f:
-        json.dump(summary, f, indent=2, default=lambda o: o.tolist() if hasattr(o, "tolist") else str(o))
-    log(f"done -> {OUT}/")
+    rows = e1_grid(X_tr, X_va, X_te, y_tr, y_va, y_te)
+    kernels = LazyKernels(X_tr, X_va, X_te)
+    plot_grid(rows)
+    summary["e1_grid"] = rows
+    summary["e2"], tuned_key = e2_compare(rows, kernels, X_tr, X_va, X_te, y_tr, y_va, y_te, units_te, rul_te)
+    summary["e3_learning_curve"] = e3_learning_curve(kernels, tuned_key, X_tr, X_va, X_te, y_tr, y_va, y_te)
+    summary["e4_shots"] = e4_shots(kernels, tuned_key, y_tr, y_va, y_te)
+    with open(OUT / "summary.json", "w") as f:
+        json.dump(summary, f, indent=2, default=lambda o: o.item() if hasattr(o, "item") else str(o))
+    log(f"done -> {OUT}")
 
 
 if __name__ == "__main__":

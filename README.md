@@ -58,3 +58,17 @@ X_train, X_val, y_train, y_val = train_val_split(X_train_full, y_train_full)   #
 |QSVC|`load_data(quantum=True)`|
 
 All models share the same training, validation and testing samples and labels to ensure a consistent performance comparison. The test set is imbalanced, so compare models on recall, false negatives and F1 rather than accuracy alone.
+
+## Quantum Support Vector Classifier (QSVC)
+
+Code: `scripts/qsvc_lib.py` (feature maps, quantum kernels, validation-based tuning, engine-level bootstrap) and `scripts/run_qsvc.py` (all experiments, about 10 min: `python scripts/run_qsvc.py`). Results, figures and discussion: [`results/qsvc/README.md`](results/qsvc/README.md).
+
+It uses the shared protocol: `common.py` data, the 319/81 split, tuning on validation only, and `evaluate()` metrics. Kernels come from `FidelityStatevectorKernel`, which is checked against `FidelityQuantumKernel` (they agree to within 4e-12).
+
+| Test set (620 failing rows) | Recall | Missed failures | False alarms | F1 |
+|---|---|---|---|---|
+| QSVC, Qiskit default ZZFeatureMap | 0.718 | 175 | 935 | 0.445 |
+| QSVC, tuned on validation (Z_r2, α=0.3) | 0.966 | 21 | 316 | 0.780 |
+| Classical RBF SVM, same features | 0.976 | 15 | 340 | 0.773 |
+
+The tuned QSVC is statistically tied with the RBF SVM and both VQCs (engine-level bootstrap). The default entangling feature map is much worse, because its kernel behaves like one built from random states.
