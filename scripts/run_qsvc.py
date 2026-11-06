@@ -179,7 +179,8 @@ def plot_grid(rows):
     ax2 = ax[1].twinx()
     ax2.plot(x, [r["k_mean"] for r in a1], "ro-")
     ax2.axhline(1 / 16, color="r", ls=":", lw=0.8)
-    ax2.text(len(x) - 0.5, 1 / 16, "Haar 1/2^n", color="r", fontsize=7, ha="right", va="bottom")
+    ax2.text(-0.4, 1 / 16, "Haar-random 1/2^n", color="r", fontsize=7, ha="left", va="bottom",
+             bbox=dict(facecolor="white", edgecolor="none", pad=1))
     ax[1].set_xticks(x, names, rotation=30, ha="right")
     ax[1].set_ylabel("kernel-target alignment (train)"); ax2.set_ylabel("mean off-diagonal kernel value", color="r")
     ax[1].set_title("Kernel quality")
@@ -209,8 +210,9 @@ def e2_compare(rows, kernels, X_tr, X_va, X_te, y_tr, y_va, y_te, units_te, rul_
     picks = {
         "QSVC default (ZZ_full_r2)": DEFAULT,
         f"QSVC tuned ({label(best['feature_map'], best['alpha'])})": (best["feature_map"], best["alpha"]),
-        "QSVC, VQC encoding (RY)": ("RY (VQC encoding)", 1.0),
     }
+    if (best["feature_map"], best["alpha"]) != ("RY (VQC encoding)", 1.0):  # avoid a duplicate row
+        picks["QSVC, VQC encoding (RY)"] = ("RY (VQC encoding)", 1.0)
     table, preds, scores = [], {}, {}
     for name, key in picks.items():
         K = kernels[key]
@@ -264,16 +266,16 @@ def e2_compare(rows, kernels, X_tr, X_va, X_te, y_tr, y_va, y_te, units_te, rul_
         a.set_xticks([]); a.set_yticks([])
     fig.colorbar(im, ax=ax, shrink=0.8)
     fig.suptitle("Training Gram matrices sorted by label (healthy | fails within 30 cycles)")
-    fig.savefig(FIG / "e2_kernel_heatmaps.png", dpi=150, bbox_inches="tight"); plt.close(fig)
+    fig.savefig(FIG / "e2_kernel_heatmaps.png", dpi=110, bbox_inches="tight"); plt.close(fig)
 
     bins = np.arange(0, 61, 5)
     fig, a = plt.subplots(figsize=(7, 4))
     for i, (name, p) in enumerate(preds.items()):
         flagged = [p[(rul_te >= lo) & (rul_te < lo + 5)].mean() for lo in bins[:-1]]
         a.plot(bins[:-1] + 2.5, flagged, "o-", ms=3, label=name, color=f"C{i}")
-    a.axvline(30.5, color="k", ls="--", lw=0.8); a.text(31.5, 0.05, "label boundary (RUL = 30)", fontsize=7)
+    a.axvline(30.5, color="k", ls="--", lw=0.8); a.text(31.5, 0.95, "label boundary (RUL = 30)", fontsize=7)
     a.set_xlabel("remaining useful life (cycles)"); a.set_ylabel("fraction predicted 'fails'")
-    a.set_title("Test predictions vs true remaining life"); a.legend(fontsize=6)
+    a.set_title("Test predictions vs true remaining life"); a.legend(fontsize=6, loc="lower left")
     fig.tight_layout(); fig.savefig(FIG / "e2_predicted_vs_rul.png", dpi=150); plt.close(fig)
 
     return {"tuned_choice": {"feature_map": tuned_key[0], "alpha": tuned_key[1]}, "table": table,
@@ -389,7 +391,7 @@ def main():
     summary["e4_shots"] = e4_shots(kernels, tuned_key, y_tr, y_va, y_te)
     with open(OUT / "summary.json", "w") as f:
         json.dump(summary, f, indent=2, default=lambda o: o.item() if hasattr(o, "item") else str(o))
-    log(f"done -> {OUT}")
+    log(f"done -> {OUT.relative_to(RESULTS_DIR.parent).as_posix()}/")
 
 
 if __name__ == "__main__":

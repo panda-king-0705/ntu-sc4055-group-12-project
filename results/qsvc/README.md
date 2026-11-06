@@ -68,6 +68,8 @@ Rules: the "default" was fixed before seeing results. "Tuned" is the grid point 
 | VQC entangled (Person 2, best seed) | 0.956 [0.92, 0.99] | 27 | 286 | 0.791 [0.74, 0.85] | 0 |
 | VQC no entanglement (Person 2, best seed) | 0.934 [0.88, 0.98] | 41 | 256 | 0.796 [0.74, 0.86] | 5 |
 
+The VQC rows use Person 2's saved best-by-validation model (`results/vqc/best_*.npz`), so they can be compared with the QSVC on exactly the same rows. Their 5-seed means (`results/vqc/summary.csv`) are almost the same: F1 0.790 ± 0.009 (entangled) and 0.796 ± 0.000 (no entanglement). The QSVC is deterministic, so a single run is enough.
+
 Paired engine-bootstrap 95% CIs for the difference in F1:
 - Tuned QSVC − RBF SVM: [−0.003, +0.018]
 - Tuned QSVC − VQC entangled: [−0.022, +0.001]
