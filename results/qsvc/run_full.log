@@ -1,0 +1,77 @@
+[05:17:17] data: train (400, 4) (pos=200), test (100, 4) (pos=50)
+[05:17:17] E0 sanity checks
+[05:17:20]    {'max_abs_kernel_diff_circuit_vs_statevector': 4.493960759077709e-12, 'QSVC_vs_precomputed_SVC_agreement': 1.0}
+[05:17:20] E1 headline QSVC (ZZ_full_r2) using FidelityQuantumKernel (sampler) kernel
+[05:34:32]    kernel computed in 1032.0s
+[05:34:34] 
+                 model  cv_acc  test_acc  test_f1  test_auc  n_support          ci95
+     QSVC (ZZ_full_r2)   0.720     0.760    0.789     0.866        371  (0.68, 0.84)
+   Classical SVM (rbf)   0.960     0.970    0.971     0.994         81  (0.93, 1.00)
+Classical SVM (linear)   0.957     0.960    0.961     0.994         91  (0.92, 0.99)
+[05:34:34]    McNemar QSVC vs classical: {'SVM_rbf': {'a_only_right': 0, 'b_only_right': 21, 'p_value': 9.5367431640625e-07}, 'SVM_linear': {'a_only_right': 1, 'b_only_right': 21, 'p_value': 1.0967254638671875e-05}}
+[05:34:35] E2 feature-map ablation
+[05:34:54] 
+ feature_map  entangling  depth  cx  n_params      C  cv_acc  test_acc  test_auc  n_support    kta  k_mean  k_std
+        Z_r1       False      2   0         4  0.300   0.950     0.970     0.994        141  0.371   0.138  0.197
+        Z_r2       False      4   0         4     10   0.850     0.940     0.946        177  0.125   0.269  0.202
+ZZ_linear_r1        True     11   6         4      3   0.880     0.900     0.970        176  0.146   0.076  0.110
+ZZ_linear_r2        True     19  12         4      1   0.828     0.860     0.923        247  0.107   0.085  0.097
+  ZZ_full_r1        True     17  12         4      1   0.852     0.950     0.976        258  0.119   0.084  0.086
+  ZZ_full_r2        True     31  24         4  0.300   0.720     0.760     0.866        371  0.068   0.077  0.077
+  ZZ_full_r3        True     45  36         4  0.010   0.632     0.630     0.691        400  0.059   0.078  0.076
+[05:34:55] E3 bandwidth (angle scaling) sweep
+[05:36:00] 
+feature_map  alpha      C  cv_acc  test_acc  test_auc    kta  k_mean  k_std
+ ZZ_full_r2  0.050      1   0.952     0.970     0.994  0.428   0.815  0.104
+ ZZ_full_r2  0.100      1   0.957     0.970     0.994  0.332   0.495  0.218
+ ZZ_full_r2  0.200      3   0.938     0.950     0.995  0.207   0.166  0.159
+ ZZ_full_r2  0.300      1   0.903     0.950     0.971  0.158   0.121  0.128
+ ZZ_full_r2  0.500      3   0.885     0.930     0.971  0.118   0.110  0.113
+ ZZ_full_r2  0.750      3   0.728     0.820     0.898  0.069   0.075  0.076
+ ZZ_full_r2  1.000  0.300   0.720     0.760     0.866  0.068   0.077  0.077
+ ZZ_full_r2  1.500  0.300   0.690     0.830     0.891  0.077   0.095  0.093
+ ZZ_full_r3  0.050      3   0.955     0.980     0.996  0.452   0.495  0.250
+ ZZ_full_r3  0.100      3   0.948     0.960     0.992  0.210   0.432  0.275
+ ZZ_full_r3  0.200      3   0.910     0.960     0.985  0.125   0.134  0.143
+ ZZ_full_r3  0.300      3   0.875     0.900     0.942  0.130   0.102  0.113
+ ZZ_full_r3  0.500      1   0.722     0.810     0.846  0.044   0.099  0.101
+ ZZ_full_r3  0.750      1   0.630     0.780     0.797  0.048   0.079  0.075
+ ZZ_full_r3  1.000  0.010   0.632     0.630     0.691  0.059   0.078  0.076
+ ZZ_full_r3  1.500      3   0.685     0.730     0.779  0.070   0.093  0.091
+       Z_r2  0.050    100   0.955     0.960     0.995  0.485   0.992  0.005
+       Z_r2  0.100     30   0.957     0.970     0.994  0.490   0.967  0.021
+       Z_r2  0.200  0.300   0.953     0.970     0.995  0.502   0.856  0.086
+       Z_r2  0.300     10   0.953     0.980     0.996  0.507   0.668  0.174
+       Z_r2  0.500  0.100   0.953     0.970     0.994  0.484   0.341  0.244
+       Z_r2  0.750      3   0.935     0.970     0.991  0.309   0.309  0.221
+       Z_r2  1.000     10   0.850     0.940     0.946  0.125   0.269  0.202
+       Z_r2  1.500      3   0.847     0.880     0.950  0.239   0.170  0.180
+[05:36:01]    best alpha by CV: 0.1
+[05:36:01] E4 learning curve (QSVC default, QSVC alpha=0.1, RBF SVM)
+[05:36:37] 
+                    model  n_train  test_acc_mean  test_acc_std
+          QSVC ZZ_full_r2       20          0.591         0.050
+QSVC ZZ_full_r2 alpha=0.1       20          0.878         0.106
+      Classical SVM (rbf)       20          0.943         0.036
+          QSVC ZZ_full_r2       40          0.615         0.051
+QSVC ZZ_full_r2 alpha=0.1       40          0.951         0.017
+      Classical SVM (rbf)       40          0.942         0.061
+          QSVC ZZ_full_r2       80          0.678         0.024
+QSVC ZZ_full_r2 alpha=0.1       80          0.959         0.014
+      Classical SVM (rbf)       80          0.960         0.014
+          QSVC ZZ_full_r2      160          0.740         0.039
+QSVC ZZ_full_r2 alpha=0.1      160          0.965         0.010
+      Classical SVM (rbf)      160          0.966         0.012
+          QSVC ZZ_full_r2      400          0.760         0.000
+QSVC ZZ_full_r2 alpha=0.1      400          0.970         0.000
+      Classical SVM (rbf)      400          0.970         0.000
+[05:36:37] E5 finite-shot kernel estimation (ZZ_full_r2, alpha=0.1)
+[05:36:50] 
+shots  test_acc_mean  test_acc_std  kernel_rmse_mean  kernel_rmse_std
+   16          0.907         0.027             0.081            0.000
+   64          0.954         0.017             0.041            0.000
+  256          0.963         0.009             0.021            0.000
+ 1024          0.968         0.004             0.011            0.000
+ 4096          0.970         0.005             0.005            0.000
+ exact test_acc = 0.970
+[05:36:50] done -> results/qsvc/

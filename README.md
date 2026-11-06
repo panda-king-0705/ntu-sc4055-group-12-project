@@ -62,3 +62,26 @@ y_test = data["y_test"]
 |QSVC|X_train_quantum, X_test_quantum|
 
 All models share the same training and testing samples and labels to ensure a consistent performance comparison.
+
+## Quantum Support Vector Classifier (QSVC)
+
+Code: `scripts/qsvc_lib.py` (feature maps, quantum kernels, evaluation helpers) and `scripts/run_qsvc.py` (experiments).
+Full results and discussion: [`results/qsvc/README.md`](results/qsvc/README.md).
+
+```bash
+python -m venv .venv && .venv/Scripts/activate   # Windows (use bin/activate on macOS/Linux)
+pip install -r requirements.txt
+python scripts/run_qsvc.py          # headline kernel via FidelityQuantumKernel, ~20 min
+python scripts/run_qsvc.py --fast   # statevector kernel throughout, ~3 min, identical numbers
+```
+
+| Experiment | Question |
+|---|---|
+| E0 | Do the circuit-based and statevector kernels agree? Is Qiskit's `QSVC` the same as an SVC on the precomputed kernel? |
+| E1 | How does the default `ZZFeatureMap` QSVC compare with classical SVMs on the same 4 features? |
+| E2 | Does entanglement help? (Z vs linear/full ZZ maps, 1–3 reps) |
+| E3 | How does kernel bandwidth (angle scaling α) affect accuracy and kernel concentration? |
+| E4 | Learning curve from 20 to 400 training samples |
+| E5 | How many measurement shots does each kernel entry need? |
+
+Main result: the default QSVC reaches 76% test accuracy against 97% for an RBF SVM. Rescaling the encoding angles (α = 0.1, chosen by CV) brings the QSVC to 97%, which is parity but not an advantage. Entangling layers *reduce* accuracy on this dataset.
