@@ -1,0 +1,49 @@
+[20:37:35] train (319, 4) (50% failing) | val (81, 4) (48%) | test (4291, 4) (14.4%, 20 engines)
+[20:37:35] E0 sanity checks
+[20:37:38]    {'max_abs_kernel_diff_circuit_vs_statevector': 4.493960759077709e-12, 'QSVC_class_vs_precomputed_SVC_agreement': 1.0}
+[20:37:38] E1 grid: 8 feature maps x 8 angle scales
+[20:38:32]    RY (VQC encoding) done
+[20:39:16]    Z_r1 done
+[20:40:07]    Z_r2 done
+[20:41:01]    ZZ_linear_r1 done
+[20:42:10]    ZZ_linear_r2 done
+[20:43:22]    ZZ_full_r1 done
+[20:44:45]    ZZ_full_r2 done
+[20:46:26]    ZZ_full_r3 done
+[20:46:27] E2 final comparison on the test set
+[20:47:11] 
+                                    model  val_accuracy  test_recall  test_fn  test_fp  test_f1    test_f1_ci95  missed_fail_min_rul  missed_fail_rul_le_10
+                QSVC default (ZZ_full_r2)         0.765        0.718      175      935    0.445  [0.419, 0.474]                    0                     58
+             QSVC tuned (Z_r2, alpha=0.3)         0.951        0.966       21      316    0.780  [0.723, 0.841]                   22                      0
+                  QSVC, VQC encoding (RY)         0.951        0.973       17      336    0.774  [0.713, 0.839]                   23                      0
+       Classical SVM (RBF, same features)         0.951        0.976       15      340    0.773  [0.712, 0.839]                   23                      0
+      VQC entangled (Person 2, best seed)                      0.956       27      286    0.791  [0.735, 0.852]                   22                      0
+VQC no_entanglement (Person 2, best seed)                      0.934       41      256    0.796  [0.739, 0.856]                    0                      5
+[20:47:12] E3 learning curve
+[20:47:18] 
+                       model  n_train  test_f1_mean  test_f1_std  test_recall_mean  test_recall_std
+                QSVC default       20         0.283        0.019             0.626            0.174
+                QSVC default       40         0.323        0.028             0.642            0.091
+                QSVC default       80         0.349        0.032             0.661            0.089
+                QSVC default      160         0.395        0.025             0.720            0.056
+                QSVC default      319         0.445        0.000             0.718            0.000
+QSVC tuned (Z_r2, alpha=0.3)       20         0.772        0.035             0.932            0.051
+QSVC tuned (Z_r2, alpha=0.3)       40         0.774        0.024             0.949            0.027
+QSVC tuned (Z_r2, alpha=0.3)       80         0.773        0.023             0.968            0.014
+QSVC tuned (Z_r2, alpha=0.3)      160         0.787        0.015             0.963            0.013
+QSVC tuned (Z_r2, alpha=0.3)      319         0.780        0.000             0.966            0.000
+         Classical SVM (RBF)       20         0.784        0.043             0.929            0.035
+         Classical SVM (RBF)       40         0.790        0.025             0.950            0.020
+         Classical SVM (RBF)       80         0.773        0.031             0.958            0.019
+         Classical SVM (RBF)      160         0.795        0.024             0.954            0.016
+         Classical SVM (RBF)      319         0.773        0.000             0.976            0.000
+[20:47:19] E4 finite-shot kernel estimation (Z_r2, alpha=0.3)
+[20:47:28] 
+shots  test_f1_mean  test_f1_std  test_recall_mean  test_recall_std  test_fn_mean  test_fn_std  kernel_rmse_train_mean  kernel_rmse_train_std
+   16         0.771        0.007             0.970            0.007        18.800        4.442                   0.079                  0.000
+   64         0.782        0.004             0.970            0.003        18.500        2.068                   0.040                  0.000
+  256         0.783        0.003             0.968            0.002        19.600        0.966                   0.020                  0.000
+ 1024         0.782        0.002             0.967            0.001        20.600        0.516                   0.010                  0.000
+ 4096         0.782        0.001             0.967            0.002        20.500        0.972                   0.005                  0.000
+ exact: f1=0.780 recall=0.966 fn=21
+[20:47:28] done -> results/qsvc/
