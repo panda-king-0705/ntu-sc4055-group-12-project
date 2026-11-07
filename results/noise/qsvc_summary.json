@@ -1,0 +1,76 @@
+{
+  "test_rows": 859,
+  "test_every_nth_row": 5,
+  "shots": 1000,
+  "classical_reference": {
+    "params": {
+      "C": 0.03,
+      "gamma": 0.3
+    },
+    "f1": 0.789808917197452,
+    "fn": 2
+  },
+  "no_entanglement": {
+    "feature_map": "Z_r2",
+    "alpha": 0.3,
+    "noiseless_C": 0.1,
+    "transpiled_for_manila": {
+      "ops": {
+        "rz": 48,
+        "sx": 16,
+        "measure": 4,
+        "barrier": 1
+      },
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    "fakemanila_f1_ci95": [
+      0.7389963277060051,
+      0.8637954784863463
+    ],
+    "noiseless_minus_fakemanila_f1_ci95": [
+      0.0,
+      0.008040008234201819
+    ],
+    "breaking_point_cx_error": {
+      "f1_below_classical": null,
+      "missed_failures_doubled": null
+    }
+  },
+  "entangled": {
+    "feature_map": "ZZ_full_r1",
+    "alpha": 0.05,
+    "noiseless_C": 3,
+    "transpiled_for_manila": {
+      "ops": {
+        "rz": 36,
+        "cx": 36,
+        "sx": 8,
+        "measure": 4,
+        "barrier": 1
+      },
+      "physical_qubits": [
+        3,
+        4,
+        2,
+        1
+      ]
+    },
+    "fakemanila_f1_ci95": [
+      0.7239164561530134,
+      0.8373702422145329
+    ],
+    "noiseless_minus_fakemanila_f1_ci95": [
+      0.00436765601279013,
+      0.051957295579993776
+    ],
+    "breaking_point_cx_error": {
+      "f1_below_classical": 0.02,
+      "missed_failures_doubled": null
+    }
+  }
+}

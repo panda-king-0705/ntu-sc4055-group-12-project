@@ -1,0 +1,67 @@
+{
+  "test_rows": 4291,
+  "shots": 1000,
+  "classical_reference": {
+    "f1": 0.7731629392971247,
+    "fn": 15
+  },
+  "transpiled_for_manila": {
+    "entangled": {
+      "ops": {
+        "rz": 40,
+        "sx": 32,
+        "cx": 20,
+        "barrier": 4,
+        "measure": 4
+      },
+      "physical_qubits": [
+        3,
+        4,
+        1,
+        2
+      ]
+    },
+    "no_entanglement": {
+      "ops": {
+        "rz": 40,
+        "sx": 32,
+        "barrier": 4,
+        "measure": 4
+      },
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3
+      ]
+    }
+  },
+  "entangled": {
+    "breaking_point_cx_error": {
+      "f1_below_classical": 0.2,
+      "missed_failures_doubled": 0.2
+    },
+    "fakemanila_f1_ci95": [
+      0.7289266221952697,
+      0.8444508950169327
+    ],
+    "noiseless_minus_fakemanila_f1_ci95": [
+      -0.0016678623323897633,
+      0.014653623099347087
+    ]
+  },
+  "no_entanglement": {
+    "breaking_point_cx_error": {
+      "f1_below_classical": null,
+      "missed_failures_doubled": null
+    },
+    "fakemanila_f1_ci95": [
+      0.726475419553911,
+      0.8432001547303271
+    ],
+    "noiseless_minus_fakemanila_f1_ci95": [
+      0.0012546919535247503,
+      0.025633370310054325
+    ]
+  }
+}

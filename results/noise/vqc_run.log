@@ -1,0 +1,107 @@
+test rows 4291 (620 failing) | classical RBF SVM: F1 0.773, missed 15
+N1 depolarizing, exact: done
+N2 shots only, entangled: done
+N3 depolarizing + 1000 shots, entangled, p_cx 0: done
+N3 depolarizing + 1000 shots, entangled, p_cx 0.001: done
+N3 depolarizing + 1000 shots, entangled, p_cx 0.005: done
+N3 depolarizing + 1000 shots, entangled, p_cx 0.01: done
+N3 depolarizing + 1000 shots, entangled, p_cx 0.02: done
+N3 depolarizing + 1000 shots, entangled, p_cx 0.05: done
+N3 depolarizing + 1000 shots, entangled, p_cx 0.1: done
+N3 depolarizing + 1000 shots, entangled, p_cx 0.2: done
+N2 shots only, no_entanglement: done
+N3 depolarizing + 1000 shots, no_entanglement, p_cx 0: done
+N3 depolarizing + 1000 shots, no_entanglement, p_cx 0.001: done
+N3 depolarizing + 1000 shots, no_entanglement, p_cx 0.005: done
+N3 depolarizing + 1000 shots, no_entanglement, p_cx 0.01: done
+N3 depolarizing + 1000 shots, no_entanglement, p_cx 0.02: done
+N3 depolarizing + 1000 shots, no_entanglement, p_cx 0.05: done
+N3 depolarizing + 1000 shots, no_entanglement, p_cx 0.1: done
+N3 depolarizing + 1000 shots, no_entanglement, p_cx 0.2: done
+N4 FakeManila full, entangled: done
+N4 FakeManila readout only, entangled: done
+N4 FakeManila gates only, entangled: done
+N4 FakeManila x0.5, entangled: done
+N4 FakeManila x1, entangled: done
+N4 FakeManila x2, entangled: done
+N4 FakeManila x4, entangled: done
+N4 FakeManila full, no_entanglement: done
+N4 FakeManila readout only, no_entanglement: done
+N4 FakeManila gates only, no_entanglement: done
+N4 FakeManila x0.5, no_entanglement: done
+N4 FakeManila x1, no_entanglement: done
+N4 FakeManila x2, no_entanglement: done
+N4 FakeManila x4, no_entanglement: done
+
+N1 depolarizing, exact:
+                       test_f1  test_fn  test_fp  test_confidence  test_loss
+model           p_cx                                                        
+entangled       0.000    0.791       27      286            0.253      0.324
+no_entanglement 0.000    0.796       41      256            0.208      0.375
+entangled       0.001    0.791       27      286            0.250      0.327
+no_entanglement 0.001    0.796       41      256            0.208      0.375
+entangled       0.005    0.791       27      286            0.241      0.338
+no_entanglement 0.005    0.796       41      256            0.206      0.378
+entangled       0.010    0.791       27      286            0.229      0.352
+no_entanglement 0.010    0.796       41      256            0.203      0.381
+entangled       0.020    0.791       27      286            0.207      0.378
+no_entanglement 0.020    0.796       41      256            0.198      0.387
+entangled       0.050    0.791       27      287            0.153      0.448
+no_entanglement 0.050    0.796       41      256            0.185      0.404
+entangled       0.100    0.791       27      287            0.091      0.538
+no_entanglement 0.100    0.796       41      256            0.164      0.432
+entangled       0.200    0.790       27      288            0.029      0.639
+no_entanglement 0.200    0.796       41      256            0.128      0.481
+
+N2 shots only (mean over seeds):
+                       test_f1  test_fn  test_fp  test_confidence  test_loss
+model           shots                                                       
+entangled       100      0.767     30.2    328.4            0.254      0.327
+                1000     0.788     27.4    291.6            0.253      0.324
+                10000    0.791     27.2    285.8            0.253      0.324
+no_entanglement 100      0.745     59.4    324.0            0.212      0.376
+                1000     0.789     45.0    263.0            0.208      0.375
+                10000    0.796     42.2    254.8            0.208      0.375
+
+N3 depolarizing + 1000 shots (mean over seeds):
+                       test_f1  test_fn  test_fp  test_confidence  test_loss
+model           p_cx                                                        
+entangled       0.000    0.786   26.333  296.667            0.253      0.324
+                0.001    0.787   25.667  296.667            0.250      0.327
+                0.005    0.788   25.000  296.000            0.241      0.338
+                0.010    0.787   25.333  297.000            0.229      0.352
+                0.020    0.785   25.000  300.000            0.207      0.378
+                0.050    0.785   26.000  299.000            0.153      0.448
+                0.100    0.775   28.667  314.333            0.091      0.539
+                0.200    0.678   60.000  471.333            0.031      0.640
+no_entanglement 0.000    0.786   46.333  265.333            0.208      0.375
+                0.001    0.787   46.000  264.000            0.208      0.376
+                0.005    0.787   47.000  263.000            0.206      0.378
+                0.010    0.789   45.333  262.333            0.203      0.381
+                0.020    0.789   45.333  261.667            0.199      0.387
+                0.050    0.788   46.667  262.667            0.185      0.405
+                0.100    0.786   48.000  263.000            0.164      0.432
+                0.200    0.782   49.333  268.333            0.129      0.481
+
+N4 FakeManila (mean over seeds):
+                              test_f1  test_fn   test_fp  test_confidence  test_loss
+model           variant                                                             
+entangled       full            0.784   28.200   298.600            0.134      0.474
+                readout only    0.788   27.667   291.667            0.183      0.409
+                gates only      0.786   27.667   295.333            0.186      0.405
+                x0.5            0.786   27.333   296.333            0.188      0.402
+                x1              0.784   27.000   300.000            0.138      0.470
+                x2              0.769   33.000   319.000            0.071      0.571
+                x4              0.443  156.333  1011.667            0.016      0.672
+no_entanglement full            0.785   47.400   267.200            0.142      0.463
+                readout only    0.785   49.000   264.000            0.145      0.457
+                gates only      0.788   45.333   263.333            0.203      0.382
+                x0.5            0.788   47.333   261.667            0.173      0.420
+                x1              0.784   48.667   266.333            0.142      0.462
+                x2              0.770   58.000   277.000            0.091      0.538
+                x4              0.595  122.000   555.000            0.025      0.651
+
+Transpiled for FakeManila: {'entangled': {'ops': {'rz': 40, 'sx': 32, 'cx': 20, 'barrier': 4, 'measure': 4}, 'physical_qubits': [3, 4, 1, 2]}, 'no_entanglement': {'ops': {'rz': 40, 'sx': 32, 'barrier': 4, 'measure': 4}, 'physical_qubits': [0, 1, 2, 3]}}
+Breaking points and bootstrap: {'entangled': {'breaking_point_cx_error': {'f1_below_classical': 0.2, 'missed_failures_doubled': 0.2}, 'fakemanila_f1_ci95': (0.7289266221952697, 0.8444508950169327), 'noiseless_minus_fakemanila_f1_ci95': (-0.0016678623323897633, 0.014653623099347087)}, 'no_entanglement': {'breaking_point_cx_error': {'f1_below_classical': None, 'missed_failures_doubled': None}, 'fakemanila_f1_ci95': (0.726475419553911, 0.8432001547303271), 'noiseless_minus_fakemanila_f1_ci95': (0.0012546919535247503, 0.025633370310054325)}}
+
+Saved results to C:\Users\User\OneDrive\NTU\SC4055\project\ntu-sc4055-group-12-project\results\noise
