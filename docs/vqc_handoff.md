@@ -129,8 +129,9 @@ from vqc import proba_from_counts
 
 backend = AerSimulator.from_backend(FakeManilaV2())
 qc = transpile(model.circuit.measure_all(inplace=False), backend, optimization_level=1, seed_transpiler=0)
-sampler = SamplerV2(default_shots=2000, seed=0)
-sampler.options.backend_options = {"noise_model": backend.options.noise_model}
+# the noise model has to go in the constructor, setting sampler.options afterwards is silently ignored
+sampler = SamplerV2(default_shots=2000, seed=0,
+                    options={"backend_options": {"noise_model": backend.options.noise_model}})
 
 result = sampler.run([(qc, model.bind(X_test))]).result()[0]
 p_fail = np.array([proba_from_counts(result.data.meas.get_counts(i)) for i in range(len(X_test))])
@@ -152,4 +153,4 @@ Things to know:
 ## For the classical baselines (Person 1)
 
 - The classical models aren't in the repo yet. Please push them, trained on the 319-row split (rule 5) and tuned on validation.
-- A quick check with default settings on the new data gave: logistic regression recall 0.945, 34 false negatives, F1 0.813; SVM recall 0.960, 25 false negatives, F1 0.816. Your tuned numbers are the official ones.
+- A quick check with default settings on the new data gave: logistic regression recall 0.945, 34 false negatives, F1 0.813; SVM recall 0.960, 25 false negatives, F1 0.816. Your tuned numbers will the official ones though.
