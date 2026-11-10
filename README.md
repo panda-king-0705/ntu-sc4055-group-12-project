@@ -70,5 +70,6 @@ It uses the shared protocol: `common.py` data, the 319/81 split, tuning on valid
 | QSVC, Qiskit default ZZFeatureMap | 0.718 | 175 | 935 | 0.445 |
 | QSVC, tuned on validation (Z_r2, α=0.3) | 0.966 | 21 | 316 | 0.780 |
 | Classical RBF SVM, same features | 0.976 | 15 | 340 | 0.773 |
+|Logistic Regression (solver=sgd, c=0.05, lr=0.001, epoch=1000)| 0.974 | 16 | 353 | 0.766 |
 
 The tuned QSVC is statistically tied with the RBF SVM and both VQCs (engine-level bootstrap). The default entangling feature map is much worse, because its kernel behaves like one built from random states.
