@@ -21,9 +21,9 @@ def format_metrics(metrics, prefix):
 def parse_args():
     parser = argparse.ArgumentParser(description="Run Logistic Regression with custom hyperparameters.")
     parser.add_argument("--epochs", type=int, default=1000, help="Maximum iterations / epochs for solver (max_iter).")
-    parser.add_argument("--solver", type=str, default="lbfgs", choices=["lbfgs", "saga", "liblinear", "sgd"],
+    parser.add_argument("--solver", type=str, default="sgd", choices=["lbfgs", "saga", "liblinear", "sgd"],
                         help="Optimization algorithm.")
-    parser.add_argument("--seed", type=int, default=42, help="Seed for training model.")
+    parser.add_argument("--seed", type=int, default=12, help="Seed for training model.")
     return parser.parse_args()
 
 
